@@ -1,0 +1,402 @@
+
+---
+title: "Análisis de Fraude Ideal Insurance"
+author: "Grupo 2"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    self_contained: true
+output_dir: output
+
+---
+
+## Introducción
+
+Este documento describe el proceso de exploración y modelado de un conjunto de datos de Ideal Insurance para predecir fraudes cometidos con la póliza de seguro de las personas. También exploraremos relaciones causales utilizando Grafos Acíclicos Dirigidos (DAGs).
+
+## Carga las librerias necesarias
+
+```{r setup, message=FALSE, warning=FALSE}
+#install.packages(c("readr", "caret", "DAGitty", "gbm"))
+library(readr)
+library(caret)
+#library(DAGitty)
+library(tidyverse)
+library(gbm)
+```
+
+## Carga el conjunto de Datos
+
+```{r}
+data <- read_csv("Dataset_Proyecto_Final_Data_Science.csv")
+#data <- as.data.frame(data1)
+head(data)
+```
+
+## Estructura y Resumen del Conjunto de Datos
+
+```{r}
+str(data)
+summary(data)
+```
+
+
+
+## Manejo de Valores Faltantes
+
+```{r}
+missing_values <- sapply(data, function(x) sum(is.na(x)))
+missing_values
+
+```
+
+### Elimina los valores faltantes
+
+```{r}
+data <- na.omit(data)
+
+
+```
+
+## Manejo de Duplicados
+
+```{r}
+# Find duplicated rows
+
+duplicates <- duplicated(data)
+
+# Display the duplicated rows
+duplicated_rows <- data[duplicates, ]
+duplicated_rows
+
+```
+
+# Visualización de la Clase Objetivo
+```{r}
+hist(data$fraud)                   
+
+```
+
+## Valores Atípicos/Outliers
+
+```{r}
+# Assuming data2 is already loaded
+
+# Identify columns that are numeric and not the target
+non_target_cols <- setdiff(names(data), "fraud")
+
+# Function to detect outliers in a vector
+detect_outliers <- function(x) {
+  Q1 <- quantile(x, 0.25, na.rm = TRUE)
+  Q3 <- quantile(x, 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  lower_bound <- Q1 - 1.5 * IQR
+  upper_bound <- Q3 + 1.5 * IQR
+  return(x < lower_bound | x > upper_bound)
+}
+
+# Apply the function to each column
+outliers_list <- lapply(data[non_target_cols], detect_outliers)
+
+# Convert list to data frame and check for rows with any outlier
+outliers_df <- as.data.frame(outliers_list)
+rows_with_outliers <- apply(outliers_df, 1, any)
+
+# Display rows with outliers
+print(data[rows_with_outliers, ])
+
+# Count rows with outliers
+cat("Number of rows with outliers:", sum(rows_with_outliers), "\n")
+
+# Remove rows with outliers
+data2_cleaned <- data[!rows_with_outliers, ]
+
+str(data2_cleaned)
+
+
+```
+
+
+## Normalización del Conjunto de Datos
+
+```{r}
+data2_cleaned1<-as.data.frame(data2_cleaned)
+data2<-data2_cleaned
+
+str(data2)
+```
+
+```{r}
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+scaled_data <- as.data.frame(lapply(data2, normalize))
+head(scaled_data)
+
+
+```
+
+```{r}
+# Identify columns with NaN values
+cols_with_nan <- apply(scaled_data, 2, function(col) any(is.nan(col)))
+cols_with_nan
+# Remove those columns
+scaled_data_cleaned <- scaled_data[, !cols_with_nan]
+str(scaled_data_cleaned)
+
+
+```
+
+
+
+
+```{r, fig.width=15, fig.height=16}
+
+library(corrplot)
+
+corrplot(cor(scaled_data_cleaned),
+         method = "color", 
+         addCoef.col="grey", 
+         order = "AOE", 
+         number.cex=0.60)
+
+```
+
+
+```{r}
+
+set.seed(123)
+
+
+# Calculate correlations with the target
+correlations <- cor(scaled_data_cleaned)[, "fraud"]
+
+# Remove the correlation of the target with itself
+correlations <- correlations[-which(names(correlations) == "fraud")]
+
+# Display the correlations in a single column
+result <- data.frame(Feature = names(correlations), Correlation = as.numeric(correlations))
+print(result)
+
+
+```
+
+
+## División del Conjunto de Datos
+
+```{r}
+scaled_data_cleaned$fraud<-as.factor(scaled_data_cleaned$fraud)
+set.seed(123)
+trainIndex <- createDataPartition(scaled_data_cleaned$fraud, p = 0.80, list = FALSE)
+train_data <- scaled_data_cleaned[trainIndex, ]
+test_data <- scaled_data_cleaned[-trainIndex, ]
+
+```
+
+
+## Regresión Logística
+
+```{r}
+
+
+#Regresión Logística
+      
+set.seed(423)
+model=glm(fraud ~tpa+policy_ref+member_id+sex+policy_start_dt+policy_end_dt+claim_ref+claim_dt+admit_dt+
+            discharge_dt+payment_dt+cons_fee+test_chg+pharmacy_cost+hosp_type,
+          data=train_data, family=binomial())
+
+summary(model)
+```
+```{r}
+# Hacer predicciones
+p_model <- predict(model, test_data, type = "response")
+# If p exceeds threshold of 0.5, 1 else 0
+reg<- ifelse(p_model > 0.25,1,0)
+# Convert the precition into factor
+predictions1 <- factor(reg, levels = levels(test_data[["fraud"]]))
+
+# Mostrar matriz de confusión
+model_pred <- confusionMatrix(data = predictions1, # predictions
+                                  reference = test_data$fraud, # actual
+                                  positive = "1",
+                                  mode = "everything")
+model_pred
+
+```
+```{r}
+library(car)
+vif(model)
+
+
+```
+
+Un VIF de 1 significa que la variable no está correlacionada con otras variables.
+Un VIF entre 1 y 5 generalmente se considera aceptable.
+Un VIF por encima de 5 (o 10, dependiendo del umbral que elijas) sugiere una alta multicolinealidad que puede ser problemática.
+
+Estamos utilizando aquellas variables que tienen un VIF de 1.
+
+
+```{r}
+model2=glm(fraud ~ tpa+policy_ref+member_id+sex+claim_ref+cons_fee+test_chg+pharmacy_cost+hosp_type,
+           data=train_data, family=binomial())
+
+summary(model2)
+
+```
+
+
+```{r}
+# hacer predicciones
+p_model <- predict(model2, test_data, type = "response")
+# If p exceeds threshold of 0.5, 1 else 0
+reg<- ifelse(p_model > 0.25,1,0)
+# Convertir la predicción a factor
+predictions1 <- factor(reg, levels = levels(test_data[["fraud"]]))
+
+# Mostrar metricas de confusión
+model_pred1 <- confusionMatrix(data = predictions1, # predictions
+                                  reference = test_data$fraud, # actual
+                                  positive = "1",
+                                  mode = "everything")
+model_pred1
+
+```
+
+
+
+
+
+
+## Gradient Boosting
+
+```{r}
+model_gbm <- gbm(fraud ~ tpa+policy_ref+member_id+sex+claim_ref+cons_fee+test_chg+pharmacy_cost+hosp_type, data=train_data)
+
+print(model_gbm)
+
+```
+
+```{r}
+# Hacer las predicciones
+p_model <- predict(model_gbm, test_data, type = "response")
+# If p exceeds threshold of 0.5, 1 else 0
+reg<- ifelse(p_model > 0.25,1,0)
+# Convert the precition into factor
+predictions1 <- factor(reg, levels = levels(test_data[["fraud"]]))
+
+# Mostrar metricas de confusión
+model_pred <- confusionMatrix(data = predictions1, # predictions
+                                  reference = test_data$fraud, # actual
+                                  positive = "1",
+                                  mode = "everything")
+model_pred
+
+```
+GBM results are not good for this dataset so we used random forest its also belongs to same family. 
+
+
+### Random Forest
+
+```{r}
+
+library(randomForest)
+
+set.seed(423)
+# Aplicar el modelo
+RF=randomForest(fraud ~tpa+policy_ref+member_id+sex+claim_ref+cons_fee+test_chg+pharmacy_cost+hosp_type,
+           data=train_data)
+print(RF)
+
+
+
+```
+
+
+```{r}
+# Hacer las predicciones
+p_model4 <- predict(RF, test_data, type = "class")
+predictions4 <- factor(p_model4, levels = levels(test_data[["fraud"]]))
+
+# Mostrar metricas de confusión
+RFF <- confusionMatrix(data = predictions4, # predictions
+                                  reference = test_data$fraud, # actual
+                                  positive = "1",
+                                  mode = "everything")
+RFF
+
+```
+
+## Precisión de glm (modelo lineal generalizado) y random forest (bosque aleatorio).
+
+```{r}
+glm_accuracy <- model_pred1$overall['Accuracy']
+rf_accuracy <- RFF$overall['Accuracy']
+
+# Extract Accuracy
+glm_accuracy <- model_pred1$overall['Accuracy']
+rf_accuracy <- RFF$overall['Accuracy']
+
+# Plotting
+accuracy_values <- c(glm_accuracy, rf_accuracy)
+names(accuracy_values) <- c("GLM", "Random Forest")
+
+barplot(accuracy_values, 
+        main="Model Accuracy Comparison", 
+        ylim=c(0, 1), 
+        col=c("blue", "red"), 
+        border="white", 
+        ylab="Accuracy")
+
+```
+
+
+```{R}
+glm_specificity <- model_pred1$byClass['Specificity']
+rf_specificity <- RFF$byClass['Specificity']
+
+# Extract Specificity
+glm_specificity <- model_pred1$byClass['Specificity']
+rf_specificity <- RFF$byClass['Specificity']
+
+# Plotting
+specificity_values <- c(glm_specificity, rf_specificity)
+names(specificity_values) <- c("GLM", "Random Forest")
+
+barplot(specificity_values, 
+        main="Model Specificity Comparison", 
+        ylim=c(0, 1), 
+        col=c("green", "pink"), 
+        border="white", 
+        ylab="Specificity")
+
+
+
+```
+
+## Directed Acyclic Graph (DAG) Analysis
+
+### Define a DAG
+
+```{r}
+#install.packages(c("ggraph", "igraph"))
+library(ggraph)
+library(igraph)
+
+```
+
+Una representación textual de nuestras suposiciones para el DAG:
+
+El tpa puede influir en claim_ref ya que podrían estar involucrados en el procesamiento de reclamos.
+El sexo podría tener una influencia indirecta en cons_fee, test_chg, pharmacy_cost según el tipo de tratamientos.
+policy_start_dt y policy_end_dt podrían influir en claim_dt ya que los reclamos deben estar dentro de la duración de la póliza.
+claim_dt, admit_dt, discharge_dt pueden influir en payment_dt ya que el pago se realiza típicamente después del alta.
+cons_fee, test_chg, pharmacy_cost juntos dan una idea del costo total del tratamiento. Desviaciones en estos podrían indicar fraude.
+hosp_type (Tipo de Hospital) podría influir en cons_fee, test_chg, pharmacy_cost según la tarificación del hospital.
+
+Ahora, representemos visualmente estas relaciones en un DAG.
+
+(El DAG se realizó en Canva por temas esteticos)
+
+
